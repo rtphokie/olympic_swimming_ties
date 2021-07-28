@@ -132,9 +132,6 @@ def get_schedule_by_sport(sport, games='tokyo-2020'):
                     results[event][eventiteration] = data
                 else:
                     results[event] = data
-                # print(f"{hit} {event}|{eventiteration}|{data['Event']}")
-                # if 'Swim-Off' in data['Event']:
-                #     raise
     return results
 
 
@@ -253,6 +250,8 @@ def get_ties(sport):
             if v2['Status'] == "Cancelled":
                 continue
             elif v2['Status'] == "Finished":
+                if 'Swim-Off' in subevent:
+                    print(event, subevent)
                 results = get_result(v2['url'])
                 v2['results'] = results
                 for athlete, v3 in results.items():

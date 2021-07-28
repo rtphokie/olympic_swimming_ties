@@ -1,10 +1,4 @@
-
-This python script gathers the latest events and their results from the official olympics website and reports on
-events (across all heats, quarterfinals, semifinals, finals, etc.) races with identical times.
-
-# Swimming ties as of 2020-07-28 21:00Z
-
-
+# swimming
 ### Men's 400m Individual Medley
 races: 5, medals awarded: yes
 
