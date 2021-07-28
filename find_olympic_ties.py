@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import unittest
+from tqdm import tqdm
+from statistics import mean
 import re
 from pprint import pprint
 import bs4
@@ -14,19 +16,19 @@ import pickle
 options = webdriver.ChromeOptions()
 options.add_argument("--headless")
 driver = None
-timed_sports = [
-    'swimming',
-    'canoe-sprint',
-    'marathon-swimming',
-    'triathlon', 'modern-pentathlon',
-    'athletics',
-    'cycling-mountain-bike', 'cycling-road', 'cycling-bmx-racing',
-    'canoe-slalom',
-    'rowing', 'sailing']
+timed_sports = ['swimming', 'canoe-sprint', 'marathon-swimming', 'triathlon', 'modern-pentathlon', 'athletics',
+                'cycling-mountain-bike', 'cycling-road', 'cycling-bmx-racing', 'canoe-slalom',
+                'rowing', 'sailing']
 base = 'https://olympics.com'
 
 
 def get_schedule_by_sport(sport, games='tokyo-2020'):
+    '''
+
+    :param sport: sport code (see url pattern on olympics.com or the timed_sport list above
+    :param games: defaults to tokyo, again see url pattern for guidance.  Really only works with current games
+    :return:
+    '''
     global driver
     url = f'{base}/{games}/olympic-games/en/results/{sport}/olympic-schedule-and-results.htm'
     url_atoms = url.split('/')
@@ -157,6 +159,11 @@ def _fix_relative_urls(thisurl, url_atoms):
 
 
 def get_result(url):
+    '''
+    fetch results l parse results table.
+    :param url:
+    :return:
+    '''
     global driver
     url_atoms = url.split('/')
     cache, page_source = get_page_source("results_cache.p", url)
@@ -166,20 +173,12 @@ def get_result(url):
     columns = []
     tables = soup.find_all('table', {'class': 'table-result'})
 
-    # print(len(tables), url)
     if len(tables) == 0:
         print(f"{len(tables)} tables {url}")
         jkl = soup.find('div', {'class': 'ResultContentContainer'})
         print(jkl.prettify())
         raise ValueError('results table not found')
-    table = tables[-1]
-    # if 'Time' not in table.prettify():
-    #     # driver.get(url.replace('#result-tab2', '#result-tab1'))
-    #     cache, page_source = get_page_source("results_cache.p", url.replace('#result-tab2', '#result-tab2'))
-    #     soup = bs4.BeautifulSoup(page_source, 'lxml')
-    #     tables = soup.find_all('table', {'class': 'table-result'})
-    #     table=tables[-1]
-
+    table = tables[-1] # its the last table of that class
     header = table.find('thead')
     for i, col in enumerate(header.find_all('th')):
         columns.append(col.text.strip().replace('  ', ' '))
@@ -187,7 +186,6 @@ def get_result(url):
     for row in body.find_all('tr'):
         vals = []
         for i, cell in enumerate(row.find_all('td')):
-            # print(f"{i} {cell.text.strip()}")
             vals.append(cell.text.strip())
         data = dict(zip(columns, vals))
         if 'Team' in data.keys():
@@ -228,17 +226,29 @@ def get_page_source(cache_file, url):
 
 
 def get_ties(sport):
+    '''
+    fetches the event list, then results for each race within each event, produces
+    :param sport: sport code
+    :return: report in markdown
+    '''
     data = get_schedule_by_sport(sport)
-    tieornot={'yes': [], 'no': [], 'tbd': []}
-    variance={'gold-silver': [], 'bronze-4th': []}
-    races=0
-    ties=0
-    for event, v in data.items():
+    tieornot = {'yes': [], 'no': [], 'tbd': []}
+    variance = {'gold-silver': [], 'bronze-4th': []}
+    races = 0
+    ties = 0
+    noties = 0
+    lines=[]
+    lines.append(f"# {sport}")
+    eventlist=tqdm(data.items())
+    for event, v in tqdm(data.items()):
+        decided = 'no'
         reaction = {'1': 0, '2': 0, '3': 0, '4': 0}
         if 'Final' in v.keys() and v['Final']['Status'] == 'Finished':
-           decided = '(medals awarded)'
-        print(f"\n{event} ({len(v)} races) {decided}")
+            decided = 'yes'
+        lines.append(f"### {event}")
+        lines.append(f"races: {len(v)}, medals awarded: {decided}")
         times = {}
+
         for subevent, v2 in v.items():
             if v2['Status'] == "Cancelled":
                 continue
@@ -246,8 +256,8 @@ def get_ties(sport):
                 results = get_result(v2['url'])
                 v2['results'] = results
                 for athlete, v3 in results.items():
-                    races+=1
-                    if v3['Time'] in ['DSQ', 'DNS']:  #disqualfication
+                    races += 1
+                    if v3['Time'] in ['DSQ', 'DNS']:  # disqualfication
                         continue
                     if 'Time' not in v3.keys():
                         print(subevent)
@@ -255,11 +265,14 @@ def get_ties(sport):
                         raise
                     if v3['Time'] not in times.keys():
                         times[v3['Time']] = []
-                    times[v3['Time']].append(f"{v3['Rank']:2} - {subevent:10} - {v3['Name']}")
+                    nameparts = v3['Name'].split(' ')
+                    name = ' '.join(nameparts[1:])
+                    country = nameparts[0][:3]
+                    times[v3['Time']].append(f"{v3['Time']} | {v3['Rank']} | {subevent} | {name} | {country}")
                     if 'Final' in subevent:
                         if 'Team' not in v3.keys():
                             try:
-                                reaction[v3['Rank']]=float(v3['ReactionTime'])
+                                reaction[v3['Rank']] = float(v3['ReactionTime'])
                             except:
                                 pprint(v3)
                                 raise
@@ -270,27 +283,41 @@ def get_ties(sport):
         if not decided:
             tieornot['tbd'].append(event)
         else:
-            if reaction is not None:
-                print(f"  reaction time deltas: gold-silver {reaction['2'] - reaction['1']:.2f} bronze-4th {reaction['4'] - reaction['3']:.2f}")
-                variance['gold-silver'].append(abs(reaction['2'] - reaction['1']))
-                variance['bronze-4th'].append(abs(reaction['4'] - reaction['3']))
-            noties = True
             for time, athletes in times.items():
                 if len(athletes) > 1:
-                    ties+=1
                     tieornot['yes'].append(event)
-                    print(' ', time)
-                    print('   ', "\n    ".join(athletes))
-            if event not in tieornot['yes']:
+
+            if event in tieornot['yes']:
+                lines.append("\ntime | rank | race | athlete | county")
+                lines.append("---- | ---- | ---- | ------- | ------")
+                for time, athletes in times.items():
+                    if len(athletes) > 1:
+                        ties += 1
+                        tieornot['yes'].append(event)
+                        lines += athletes
+            else:
                 noties += 1
                 tieornot['no'].append(event)
-                print(f"   no ties")
+                lines.append(f"   no ties")
+            if reaction is not None:
+                variance['gold-silver'].append(abs(reaction['2'] - reaction['1']))
+                variance['bronze-4th'].append(abs(reaction['4'] - reaction['3']))
 
-    print(f"total races {races} completd, races with ties {ties}")
-    print(f"in events {len(set(data))}: ties {len(set(tieornot['yes']))} noties {len(set(tieornot['no']))} tbd {len(set(tieornot['tbd']))}")
-    from statistics import mean
-    print(f"reaction time mean variance: gold-silver {mean(variance['gold-silver']):.2f} bronze-4th {mean(variance['bronze-4th']):.2f}")
+        f = open('README.md', 'w')
+        f.write("\n".join(lines))
+        f.close()
 
+    lines.append("\n## Overall stats")
+    lines.append(f"total races {races} completed, races with ties {ties}\n")
+    lines.append("total events | events with ties | without ties | not completed yet")
+    lines.append(" --- | --- | --- | --- ")
+    lines.append(f"{len(set(data.keys()))} | {len(set(tieornot['yes']))} |  {len(set(tieornot['no']))} |  {len(set(tieornot['tbd']))}")
+    lines.append(f"reaction time mean variance: gold-silver {mean(variance['gold-silver']):.2f} seconds,  bronze-4th {mean(variance['bronze-4th']):.2f} seconds\n")
+
+    f = open('README.md', 'w')
+    f.write("\n".join(lines))
+    f.close()
+    print('done')
 
 class FiveRingedTestCases(unittest.TestCase):
     def test_schedule(self):
@@ -306,6 +333,9 @@ class FiveRingedTestCases(unittest.TestCase):
         url = 'https://olympics.com/tokyo-2020/olympic-games/en/results/swimming/results-women-s-1500m-freestyle-heat-000100-.htm'
         data = get_result(url)
         self.assertEqual(len(data), 3)
+
+    def test_ties(self):
+        get_ties('swimming')
 
 
 if __name__ == '__main__':
